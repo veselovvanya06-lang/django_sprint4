@@ -13,37 +13,53 @@ from .forms import PostForm, UserForm, CommentForm
 
 POSTS_PER_PAGE = 10
 
-def index(request):
-    posts = Post.objects.select_related('category', 'location', 'author').annotate(
-        comment_count=Count('comments')).filter(
-        pub_date__lte=timezone.now(), is_published=True, category__is_published=True
+def get_published_posts():
+    return Post.objects.select_related('category', 'location', 'author').annotate(
+        comment_count=Count('comments')
+    ).filter(
+        pub_date__lte=timezone.now(),
+        is_published=True,
+        category__is_published=True
     )
-    paginator = Paginator(posts, POSTS_PER_PAGE)
-    page_obj = paginator.get_page(request.GET.get('page'))
+
+def get_paginated_page(request, queryset):
+    paginator = Paginator(queryset, POSTS_PER_PAGE)
+    return paginator.get_page(request.GET.get('page'))
+
+def index(request):
+    posts = get_published_posts()
+    page_obj = get_paginated_page(request, posts)
     return render(request, 'blog/index.html', {'page_obj': page_obj})
 
 def post_detail(request, post_id):
     post = get_object_or_404(Post, pk=post_id)
-    if not post.is_published and post.author != request.user:
-        return redirect('blog:index')
+    if post.author != request.user:
+        if (not post.is_published or 
+            post.pub_date > timezone.now() or 
+            not post.category.is_published):
+            return redirect('blog:index')
+            
     comments = post.comments.all()
     form = CommentForm()
     return render(request, 'blog/detail.html', {'post': post, 'form': form, 'comments': comments})
 
 def category_posts(request, category_slug):
     category = get_object_or_404(Category, slug=category_slug, is_published=True)
-    posts = Post.objects.filter(category=category, is_published=True, pub_date__lte=timezone.now())
-    paginator = Paginator(posts, POSTS_PER_PAGE)
-    page_obj = paginator.get_page(request.GET.get('page'))
+    # Теперь здесь есть и фильтрация, и подсчет комментов
+    posts = get_published_posts().filter(category=category)
+    page_obj = get_paginated_page(request, posts)
     return render(request, 'blog/category.html', {'category': category, 'page_obj': page_obj})
 
 def profile(request, username):
     author = get_object_or_404(User, username=username)
     posts = Post.objects.filter(author=author).annotate(comment_count=Count('comments'))
     if request.user != author:
-        posts = posts.filter(is_published=True, pub_date__lte=timezone.now())
-    paginator = Paginator(posts, POSTS_PER_PAGE)
-    page_obj = paginator.get_page(request.GET.get('page'))
+        posts = posts.filter(
+            is_published=True, 
+            pub_date__lte=timezone.now(),
+            category__is_published=True
+        )
+    page_obj = get_paginated_page(request, posts)
     return render(request, 'blog/profile.html', {'profile': author, 'page_obj': page_obj})
 
 class RegistrationView(CreateView):
